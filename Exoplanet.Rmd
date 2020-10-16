@@ -1,0 +1,368 @@
+---
+title: "ADVR_project"
+author: "Varun Kumar"
+date: "7/29/2020"
+output: html_document
+runtime: shiny
+---
+
+```{r, libraries,message=FALSE,warning=FALSE}
+#Including the necessay libraries
+rm(list = ls())
+library(readr)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(shiny)
+library(rstan)
+library(shinystan)
+library(ggiraph)
+library(gganimate)
+library(reshape2)
+library(tidyr)
+library(ggmap)
+library(lubridate)
+```
+First we Import the exo planet data from the CSV file after setting the working directory.
+```{r, warning=FALSE, message=FALSE}
+#Setting the working directory
+setwd("C:\\Users\\vk\\Desktop")
+
+#Importing the data
+exo <- read_csv("exo_data.csv")
+#viewing the structure of the data
+str(exo)
+```
+
+
+
+converting the data as per the question, We see that the columns 1,16,17,18,25 are already in character format and rest need to be converted. We do this using dplyr and magrittr package
+```{r}
+#Converting to factor
+exo$flag %<>% as.factor
+exo$meth %<>% as.factor
+
+#converting to integer
+exo$year %<>% as.integer
+
+#Verifying the change
+str(exo)
+```
+
+Q2) Exclude the exoplanets with an unknown method of discovery.
+
+```{r}
+#Removing the exo planets with unknown method of discovery
+exo <-exo[which(!exo$meth == ""),]
+```
+
+Q3) Create a graphic which illustrates the relationship between the log-distances from the Sun and the methods of discovery.
+```{r,message=FALSE,warning=FALSE}
+#ggplot to show relationship between log distances and method
+ggplot(exo, aes(x=log(dist), fill=meth, color=meth)) +
+  geom_histogram(position="identity") +
+  labs(title="Log-Distance from Sun by Method of Discovery",x="Log-Dist from Sun (parsec)", y = "Count")
+```
+
+ 
+Q4) Create scatter plots of the log-mass versus log-distances, separating by methods of discovery. Hovering with the cursor highlights the point and displays its name, and,if you click, the exo planet’s page on the Open Exo planet Catalogs will be opened.(paste the id after http://www.openexoplanetcatalogue.com/planet/).
+```{r, message=FALSE,warning=FALSE}
+exo$onclick <- sprintf("window.open(\"%s%s\")",
+                        "http://www.openexoplanetcatalogue.com/planet/",
+                        exo$id)
+
+gg_graph = ggplot(exo,
+                  aes(x = log(mass),
+                      y = log(dist),
+                      color = meth)) +
+                  xlab('Log(Mass)') +
+                  ylab('Log(Dist') +
+                  scale_color_discrete(name="Discovery Method")+
+                  geom_point_interactive(aes(exo_id = id,
+                             tooltip = id,
+                             onclick = onclick)) +
+                  labs(title="Scatterplots of log-mass vs. log-distances")
+
+ggiraph(code = print(gg_graph))
+```
+
+Q5) Rename the radius into jupiter_radius, and create a new column called earth_radius which is 11.2 times the Jupiter radius.
+```{r}
+#renaming using the tidyverse package function
+exo <- exo %>% 
+          rename(jupiter_radius = radius ) 
+#creating new column as per the question
+exo <- exo %>%
+          mutate(earth_radius = jupiter_radius * 11.2 ) 
+```
+
+
+
+Q6) Focus only on the rows where log-earth radius and log-period have no missing values,and perform k means with four clusters on these two columns.
+
+```{r}
+# create new df for clustering
+exo_clustering <- exo 
+
+# taking the radius values excluding the NAs and focusing only on log-radius of Earth and log-period
+exo_clustering <- exo %>% drop_na(earth_radius, period)  # 2732 obs
+
+exo_clustering <- exo_clustering %>%
+                      mutate(LogERadius = log(earth_radius),
+                             LogPeriod  = log(period))
+
+
+exo_kmeans <- exo_clustering %>%
+                      select(LogERadius,LogPeriod)
+
+# performing k-means with 4 clusters
+clust_km4  <- kmeans(exo_kmeans, 4)
+
+#displaying the cluster result
+table(clust_km4$cluster)
+```
+
+
+Q7) Add the clustering labels to the data set through a new factor column called type,with levels rocky,hot_jupiters,cold_gas_giants,others; similarly tohttps://en.wikipedia.org/wiki/Exoplanet#/media/File:ExoplanetPopulations-20170616.pngand produce the scatter plot highlighting these clusters.
+```{r}
+clust_km4$cluster <- as.factor(clust_km4$cluster)
+
+ggplot(exo_kmeans, aes(LogPeriod,LogERadius ,color = clust_km4$cluster)) + geom_point() +
+                                      labs(title="Clustering solutions of Exoplanets")
+```
+The cluster 1,2,3,4 are cold_gas_giants, others, Rock & hot_jupiters respectively.
+```{r}
+exo_clustering$type <- clust_km4$cluster
+exo_clustering$type <- as.numeric(exo_clustering$type)
+
+exo_clustering$type[exo_clustering$type == 1] <- "cold_gas_giants"
+exo_clustering$type[exo_clustering$type == 2] <- "others"
+exo_clustering$type[exo_clustering$type == 3] <- "Rocky"
+exo_clustering$type[exo_clustering$type == 4] <- "hot_jupiters"
+
+#Checking if the headers are assigned
+table(exo_clustering$type) 
+```
+
+
+Q8) Use a violin plot to illustrate how these clusters relate to the log-mass of the exo planet
+
+In order to see how the clusters relate to the log-mass, we can make use of a histogram or a violin plot.
+```{r, message=FALSE, warning=FALSE}
+#Histogram
+ggplot(exo_clustering, aes(x = log(mass))) +
+                            geom_histogram(aes(color = type, fill = type), 
+                                            position = "identity", bins = 30, alpha = 0.4) +
+                                                       labs(title="log mass of the exoplanet W.r.t Clusters")
+```
+
+
+```{r,message=FALSE, warning=FALSE}
+#Violin Plot
+ggplot(exo_clustering, aes(x = type, y = log(mass))) + 
+  geom_violin() + labs(title="Violin plot of log-mass of the exoplanet")
+```
+
+
+
+Q9) Transform r_asc and decl into two new variables that are the same variables but in values of seconds. Use these as coordinates to represent a celestial map for the exo planets.
+
+```{r, message=FALSE, warning=FALSE}
+# converting r_asc to hh:mm:ss format
+exo$r_asc <- gsub(" ",":", exo$r_asc, fixed=TRUE) 
+exo$r_asc <- hms(exo$r_asc) 
+
+#storing in new variable
+exo$r_asc_second <- period_to_seconds(exo$r_asc)
+
+# convert Declination to hh:mm:ss format
+exo$decl <- gsub(" ", ":", exo$decl, fixed=TRUE) 
+exo$decl <- hms(exo$decl) 
+
+#Storing in new variable
+exo$decl_second <- period_to_seconds(exo$decl)
+
+# scatter plot representing a celestial map for the exo planets
+ggplot(exo, aes(r_asc_second, decl_second, color= meth)) +
+                            geom_point() + 
+                        labs(title="Celestial Map for Exo planets", x="Right ascension (seconds)",y="Declination (seconds)")
+```
+
+
+Q10) Create an animated time series where multiple lines illustrate the evolution overtime of the total number of exo planets discovered for each method up to that year
+```{r, message=FALSE, warning=FALSE}
+exo.timeseries <- exo %>% group_by(meth, year) %>%  summarise(Count = length(meth)) %>%
+                          mutate(Count = cumsum(Count))
+
+exo.timeseries <- na.omit(exo.timeseries)
+
+#Animated Time series
+ggplot(exo.timeseries, aes(x = year, y = Count, group = meth)) + 
+  geom_line(aes(color = meth)) + 
+  geom_point(size = 2) + 
+  transition_reveal(year) + 
+  labs(title = 'Evolution of exoplanets by methods', y = 'Number Discovered') 
+```
+
+
+
+Q11) Create an interactive plot with Shiny where you can select the year (slider widget,with values≥2009) and exo planet type. Exo planets appear as points on a scatter-plot (log-mass vs log-distance coloured by method) only if they have already been discovered. If type is equal to 'all' all types are plotted together.
+
+
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Defining UI for histogram app
+ui <- fluidPage(
+    
+        
+            sliderInput("slider",
+                        "Select Year", min=2009,
+                        max(exo_clustering$year,na.rm = TRUE),max(exo_clustering$year,na.rm = TRUE),
+                        round = TRUE, sep = '', width = '100%',step = 1,ticks = FALSE)
+        ,
+        selectInput(inputId = "exo_type",
+                    label = "Type",
+                    choices = c('hot_jupiters','Rocky','cold_gas_giants','others',"all"),
+                    selected = 0),
+        
+       
+      
+        
+
+# Show a plot of the generated distribution
+        
+plotOutput("scatter1",height = 450)
+        
+    
+)
+
+# Defining server logic for histogram
+server <- function(input, output) 
+{
+  #Scatter plot of all discoveries by years of planets with known mass
+output$scatter1 = renderPlot({
+      if(input$exo_type=="all")
+      {
+        scatter_1<-exo_clustering %>%filter(., year <= input$slider, !is.na(mass),
+                                     !is.na(dist))
+      }
+      else
+      {
+        scatter_1<-exo_clustering %>%filter(., year <= input$slider, !is.na(mass),
+                                     !is.na(dist)) %>% filter(., type == input$exo_type)
+      }
+      
+        
+        ggplot(scatter_1, aes(x = log(dist), y = log(mass),
+                                 color = meth)) +
+            geom_point(size = 3) +
+            labs(title = paste("Discovery Year", input$slider),
+                 x = "Distance of exo planet from sun (Parsecs)",
+                 y = "Planet Mass (Jupiter Mass)",
+                 colour = NULL) 
+            
+    })
+  
+}
+
+#Running the app
+shinyApp(ui = ui, server = server)
+
+
+```
+
+
+Q12) Fit a linear regression model where log period is the response variable and the logs of host_mass,host_temp and axis are the covariates (exclude rows that contain at least one missing value). Include an intercept term in the regression model.
+
+```{r}
+#Creating new data for regression analysis
+analysis_exo <- exo[,c("period","host_mass","host_temp","axis")] 
+#Data with missing values are omitted
+analysis_exo.complete <- na.omit(analysis_exo)
+#We fit the linear model 
+fit<-lm(log(period)~log(host_mass)+log(host_temp)+log(axis),data = analysis_exo)
+summary(fit)
+```
+
+
+
+Q13) Include in your R Markdown document some model summaries and an interpretation of the model you have fit.
+
+From the coefficients and estimates, 
+- We see that the estimate value is 5.65 and the p value is less than 0.05
+- The covariate becomes significant when p value is less than 0.05.
+- With unit increase in log hot star mass we see that the period decreases by 0.412, unit change in log hot star temperature we see that the period increases by 0.02 and finally unit increase in hot star mass we see that the number of days increases to 1.488.
+
+From the Residual Summary statistics,
+- We know that the median should be close to zero which is the same in our case.
+
+Considering the hypothesis,
+- Here we can reject the null hypothesis that the coefficient is 0 as the probability is very low
+- The hot star mass covariate plays an important role in predicting and building the model.
+- Also from the p value we can say that axis plays an important role too.
+    
+Considering the adjusted R squared value,
+- From the adjusted R square value we can say that 99.3% of the variation can be explained by the predictor variables.
+
+
+
+Q14) Embed the Shiny app from (11) in your RMarkdown document.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Defining UI for histogram app
+ui <- fluidPage(
+    
+        
+            sliderInput("slider",
+                        "Select Year", min=2009,
+                        max(exo_clustering$year,na.rm = TRUE),max(exo_clustering$year,na.rm = TRUE),
+                        round = TRUE, sep = '', width = '100%',step = 1,ticks = FALSE)
+        ,
+        selectInput(inputId = "exo_type",
+                    label = "Type",
+                    choices = c('hot_jupiters','Rocky','cold_gas_giants','others',"all"),
+                    selected = 0),
+        
+       
+      
+        
+
+# Show a plot of the generated distribution
+        
+plotOutput("scatter1",height = 450)
+        
+    
+)
+
+# Defining server logic for histogram
+server <- function(input, output) 
+{
+  #Scatter plot of all discoveries by years of planets with known mass
+output$scatter1 = renderPlot({
+      if(input$exo_type=="all")
+      {
+        scatter_1<-exo_clustering %>%filter(., year <= input$slider, !is.na(mass),
+                                     !is.na(dist))
+      }
+      else
+      {
+        scatter_1<-exo_clustering %>%filter(., year <= input$slider, !is.na(mass),
+                                     !is.na(dist)) %>% filter(., type == input$exo_type)
+      }
+      
+        
+        ggplot(scatter_1, aes(x = log(dist), y = log(mass),
+                                 color = meth)) +
+            geom_point(size = 3) +
+            labs(title = paste("Discovery Year", input$slider),
+                 x = "Distance of exo planet from sun (Parsecs)",
+                 y = "Planet Mass (Jupiter Mass)",
+                 colour = NULL) 
+            
+    })
+  
+}
+
+#Running the app
+shinyApp(ui = ui, server = server)
+
+```
